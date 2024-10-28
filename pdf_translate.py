@@ -23,7 +23,7 @@ MODEL_NAME = 'gemma2-9b-it'
 def pdf_to_image(pdf_file_path, output_dir):
     images = convert_from_path(pdf_file_path, poppler_path = r".\bin")
     for i, image in enumerate(images):
-        image.save(os.path.join(output_dir, f'page_{i+1}.png'))
+        image.save(os.path.join(output_dir, f'page_{i+1:03d}.png'))
 
 def ocr(image_file_path):
     text = pytesseract.image_to_string(Image.open(image_file_path))

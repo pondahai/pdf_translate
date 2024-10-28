@@ -29,15 +29,32 @@ def ocr(image_file_path):
     text = pytesseract.image_to_string(Image.open(image_file_path))
     return text
 
+# def translate(text):
+#     headers = {'Authorization': f'Bearer {API_KEY}'}
+#     data = {'messages': [{'role': 'user', 'content': f'Translate to zh_TW: {text} '}], 'model': f'{MODEL_NAME}'}
+#     response = requests.post(f'{API_URL}/chat/completions', headers=headers, json=data)
+#     if response.status_code == 200:
+#         return response.json()['choices'][0]['message']['content']
+#     else:
+#         raise Exception(f'Translation failed: {response.text}')
+
 def translate(text):
     headers = {'Authorization': f'Bearer {API_KEY}'}
-    data = {'messages': [{'role': 'user', 'content': f'Translate to zh_TW: {text} '}], 'model': f'{MODEL_NAME}'}
-    response = requests.post(f'{API_URL}/chat/completions', headers=headers, json=data)
-    if response.status_code == 200:
-        return response.json()['choices'][0]['message']['content']
-    else:
-        raise Exception(f'Translation failed: {response.text}')
-
+    data = {'messages': [{'role': 'user', 'content': f'{text} \n Translate to zh_TW'}], 'model': f'{MODEL_NAME}'}
+    retry_count = 0
+    while retry_count < 3:
+        try:
+            response = requests.post(f'{API_URL}/chat/completions', headers=headers, json=data)
+            response.raise_for_status()
+            return response.json()['choices'][0]['message']['content']
+        except requests.exceptions.RequestException as e:
+            retry_count += 1
+            if retry_count < 3:
+                print(f"遇到錯誤，重試第{retry_count+1}次...")
+                time.sleep(1)  # 等待1秒後重試
+            else:
+                raise Exception(f"重試三次後仍然遇到錯誤: {e}")
+            
 def main():
     pdf_file_path = 'input.pdf'
     output_dir = 'output'
@@ -52,7 +69,12 @@ def main():
             image_file_path = os.path.join(output_dir, file_name)
             text = ocr(image_file_path)
             texts.append(text)
-
+            # 將text存為檔案
+            txt_file_name = file_name.replace('.png', '.txt')
+            txt_file_path = os.path.join(output_dir, txt_file_name)
+            with open(txt_file_path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            
     # 大語言模型翻譯
     translated_texts = []
     for text in texts:

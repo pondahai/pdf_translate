@@ -16,8 +16,8 @@ load_dotenv()
 
 # OpenAI API設定
 # API_URL = os.getenv('API_URL')
-# API_URL = r"https://api.groq.com/openai/v1"
-API_URL = r"http://ubuntu:1234/v1"
+API_URL = r"https://api.groq.com/openai/v1"
+# API_URL = r"http://ubuntu:1234/v1"
 # API_URL = r"http://127.0.0.1:1234/v1"
 API_KEY = os.getenv('API_KEY')
 MODEL_NAME = 'gemma2-9b-it'
@@ -30,6 +30,13 @@ class FileProcessorApp:
         self.root = root
         self.root.title("File Processor")
         self.root.geometry("400x200")
+
+        # 新增OCR語言選項下拉選單
+        self.ocr_lang_var = tk.StringVar(self.root)
+        self.ocr_lang_var.set("eng")  # 預設為英文
+        self.ocr_lang_options = ["", "eng", "chi_tra", "chi_sim", "jpn", "kor"]
+        self.ocr_lang_dropdown = ttk.OptionMenu(self.root, self.ocr_lang_var, *self.ocr_lang_options)
+        self.ocr_lang_dropdown.pack(pady=10)
 
         self.label = tk.Label(root, text="Drag and drop a file here")
         self.label.pack(pady=20)
@@ -51,7 +58,6 @@ class FileProcessorApp:
         scrollbar.config(command=self.log_text_area.yview)
 
         self.log_frame.pack(pady=20)
-
 
     def log_info(self, message):
         self.log_text_area.insert(tk.END, f"[INFO] {message}\n")
@@ -110,7 +116,8 @@ class FileProcessorApp:
             image.save(os.path.join(output_dir, f'page_{i+1:03d}.png'))
 
     def ocr(self, image_file_path):
-        text = pytesseract.image_to_string(Image.open(image_file_path))
+        # 使用選擇的OCR語言進行文字辨識
+        text = pytesseract.image_to_string(Image.open(image_file_path), lang=self.ocr_lang_var.get())
         return text
 
     # def translate(text):
@@ -157,11 +164,18 @@ class FileProcessorApp:
         output_dir = filename
 
         # PDF頁面轉換圖檔
-        self.pdf_to_image(file_path, output_dir)
+        images = convert_from_path(file_path, poppler_path=r".\bin")
+        total_pages = len(images)
+        self.progress["maximum"] = total_pages  # Set the maximum value of the progress bar
+
+        for i, image in enumerate(images):
+            image.save(os.path.join(output_dir, f'page_{i+1:03d}.png'))
+            self.progress["value"] = i + 1  # Update progress bar
+            self.root.update_idletasks()  # Update the GUI
 
         # OCR文字辨識
         texts = []
-        for file_name in os.listdir(output_dir):
+        for i, file_name in enumerate(os.listdir(output_dir)):
             if file_name.endswith('.png'):
                 image_file_path = os.path.join(output_dir, file_name)
                 text = self.ocr(image_file_path)
@@ -171,12 +185,16 @@ class FileProcessorApp:
                 txt_file_path = os.path.join(output_dir, txt_file_name)
                 with open(txt_file_path, 'w', encoding='utf-8') as f:
                     f.write(text)
-                
+                self.progress["value"] = i + 1  # Update progress bar
+                self.root.update_idletasks()  # Update the GUI
+
         # 大語言模型翻譯
         translated_texts = []
-        for text in texts:
+        for i, text in enumerate(texts):
             translated_text = self.translate(text)
             translated_texts.append(translated_text)
+            self.progress["value"] = i + 1  # Update progress bar
+            self.root.update_idletasks()  # Update the GUI
             time.sleep(1)
 
         # 保存翻譯結果
@@ -185,16 +203,9 @@ class FileProcessorApp:
                 f.write(text + '\n')
 
     def update_progress(self, total_time):
-#         start_time = time.time()
-#         print(total_time)
-        while True:
-#             elapsed_time = time.time() - start_time
-#             progress = (elapsed_time / total_time) * 100
-            self.progress["value"] = self.progress["value"] + 1
-            self.root.update_idletasks()
-            if self.progress["value"] >= 100:
-                break
-            time.sleep(total_time/100)  # 更新間隔
+        # This method is no longer needed as we update the progress bar directly in process_pdf_file
+        pass
+
 
     def format_time(self, seconds):
         hours = int(seconds // 3600)

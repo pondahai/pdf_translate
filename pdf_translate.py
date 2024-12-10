@@ -1,7 +1,7 @@
 import os
 import requests
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageFilter
 from pdf2image import convert_from_path
 from dotenv import load_dotenv
 import time
@@ -15,21 +15,15 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 load_dotenv()
 
 # OpenAI API設定
-# API_URL = os.getenv('API_URL')
 API_URL = r"https://api.groq.com/openai/v1"
-# API_URL = r"http://ubuntu:1234/v1"
-# API_URL = r"http://127.0.0.1:1234/v1"
 API_KEY = os.getenv('API_KEY')
 MODEL_NAME = 'gemma2-9b-it'
-# MODEL_NAME = ''
-
-            
 
 class FileProcessorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("File Processor")
-        self.root.geometry("400x200")
+        self.root.geometry("400x250")
 
         # 新增OCR語言選項下拉選單
         self.ocr_lang_var = tk.StringVar(self.root)
@@ -37,6 +31,11 @@ class FileProcessorApp:
         self.ocr_lang_options = ["", "eng", "chi_tra", "chi_sim", "jpn", "kor"]
         self.ocr_lang_dropdown = ttk.OptionMenu(self.root, self.ocr_lang_var, *self.ocr_lang_options)
         self.ocr_lang_dropdown.pack(pady=10)
+
+        # 新增翻譯選項
+        self.translate_var = tk.BooleanVar(self.root, value=True)  # 預設為勾選
+        self.translate_checkbutton = ttk.Checkbutton(self.root, text="Translate to zh_TW", variable=self.translate_var)
+        self.translate_checkbutton.pack(pady=5)
 
         self.label = tk.Label(root, text="Drag and drop a file here")
         self.label.pack(pady=20)
@@ -64,25 +63,11 @@ class FileProcessorApp:
         self.log_text_area.see(tk.END)  # 移動視窗到最後一行
 
     def replace_extension_and_avoid_duplicate(self, full_path, new_extension):
-        """
-        替換檔案的副檔名，並避免目的地已經有同名檔案存在。
-
-        參數:
-        full_path (str): 包含檔案名稱的全路徑字串。
-        new_extension (str): 新的副檔名（包括點號，例如 '.new'）。
-
-        回傳:
-        str: 新的檔案全路徑。
-        """
-        # 提取檔案名稱和副檔名
         file_name_with_extension = os.path.basename(full_path)
         file_name, _ = os.path.splitext(file_name_with_extension)
-
-        # 構建新的檔案名稱
         new_file_name = file_name + new_extension
         new_full_path = os.path.join(os.path.dirname(full_path), new_file_name)
 
-        # 檢查目的地是否已經存在同名檔案
         counter = 1
         while os.path.exists(new_full_path):
             new_file_name = f"{file_name}_{counter}{new_extension}"
@@ -92,13 +77,7 @@ class FileProcessorApp:
         return new_full_path
 
     def on_drop(self, event):
-        file_path = event.data
-#         print(event.type)
-#         file_path = file_path[1:-1]
-#         file_path = file_path.replace("/", '\\')
-#         file_path = file_path.replace(" ", '\ ')
-        file_path = file_path.replace("{", '').replace("}", '')
-#         file_path = f"{file_path}"
+        file_path = event.data.replace("{", '').replace("}", '')
         print(file_path)
         if os.path.isfile(file_path):
             file_extension = os.path.splitext(file_path)[1].lower()
@@ -111,23 +90,20 @@ class FileProcessorApp:
             messagebox.showinfo("File Type", f"Not a valid file: {file_path}")
 
     def pdf_to_image(self, pdf_file_path, output_dir):
-        images = convert_from_path(pdf_file_path, poppler_path = r".\bin")
+        images = convert_from_path(pdf_file_path, grayscale=True, fmt='png', poppler_path=r".\bin")
         for i, image in enumerate(images):
+            # 去噪
+            image = image.filter(ImageFilter.MedianFilter(size=3))
+            # 二值化
+            image = image.convert('1')
+            # 閾值化
+            threshold = 128
+            image = image.point(lambda p: p > threshold and 255)
             image.save(os.path.join(output_dir, f'page_{i+1:03d}.png'))
 
     def ocr(self, image_file_path):
-        # 使用選擇的OCR語言進行文字辨識
         text = pytesseract.image_to_string(Image.open(image_file_path), lang=self.ocr_lang_var.get())
         return text
-
-    # def translate(text):
-    #     headers = {'Authorization': f'Bearer {API_KEY}'}
-    #     data = {'messages': [{'role': 'user', 'content': f'Translate to zh_TW: {text} '}], 'model': f'{MODEL_NAME}'}
-    #     response = requests.post(f'{API_URL}/chat/completions', headers=headers, json=data)
-    #     if response.status_code == 200:
-    #         return response.json()['choices'][0]['message']['content']
-    #     else:
-    #         raise Exception(f'Translation failed: {response.text}')
 
     def translate(self, text):
         headers = {'Authorization': f'Bearer {API_KEY}'}
@@ -146,10 +122,7 @@ class FileProcessorApp:
                 else:
                     raise Exception(f"重試三次後仍然遇到錯誤: {e}")
 
-
     def process_pdf_file(self, file_path):
-#         pdf_file_path = 'input.pdf'
-        # 創建資料夾
         filename_with_ext = os.path.basename(file_path)
         filename, _ = os.path.splitext(filename_with_ext)
         try:
@@ -157,55 +130,67 @@ class FileProcessorApp:
             print(f"資料夾 {filename} 創建成功")
         except FileExistsError:
             print(f"資料夾 {filename} 已經存在")
-            pass
         except OSError as e:
             print(f"錯誤：{e}")
         
         output_dir = filename
 
         # PDF頁面轉換圖檔
-        images = convert_from_path(file_path, poppler_path=r".\bin")
+        images = convert_from_path(file_path, grayscale=True, fmt='png', poppler_path=r".\bin")
         total_pages = len(images)
-        self.progress["maximum"] = total_pages  # Set the maximum value of the progress bar
+        self.progress["maximum"] = total_pages
+
+        texts = []
+        translated_texts = []
 
         for i, image in enumerate(images):
+            # 二值化
+#             image = image.convert('1')
+            # 閾值化
+            threshold = 150
+            image = image.point(lambda p: p > threshold and 255)
             image.save(os.path.join(output_dir, f'page_{i+1:03d}.png'))
-            self.progress["value"] = i + 1  # Update progress bar
-            self.root.update_idletasks()  # Update the GUI
+            # 去噪
+            image = image.filter(ImageFilter.MedianFilter(size=3))
+            
+            # OCR文字辨識
+            image_file_path = os.path.join(output_dir, f'page_{i+1:03d}.png')
+            text = self.ocr(image_file_path)
+            texts.append(text)
+            
+            # 保存OCR結果
+            txt_file_name = f'page_{i+1:03d}.txt'
+            txt_file_path = os.path.join(output_dir, txt_file_name)
+            with open(txt_file_path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            
+            # 根據選項決定是否進行翻譯
+            if self.translate_var.get():
+                translated_text = self.translate(text)
+                translated_texts.append(translated_text)
+                
+                # 保存翻譯結果
+                translated_txt_file_name = f'page_{i+1:03d}_translated.txt'
+                translated_txt_file_path = os.path.join(output_dir, translated_txt_file_name)
+                with open(translated_txt_file_path, 'w', encoding='utf-8') as f:
+                    f.write(translated_text)
+            
+            self.progress["value"] = i + 1
+            self.root.update_idletasks()
+            time.sleep(1)  # 等待1秒後處理下一頁
 
-        # OCR文字辨識
-        texts = []
-        for i, file_name in enumerate(os.listdir(output_dir)):
-            if file_name.endswith('.png'):
-                image_file_path = os.path.join(output_dir, file_name)
-                text = self.ocr(image_file_path)
-                texts.append(text)
-                # 將text存為檔案
-                txt_file_name = file_name.replace('.png', '.txt')
-                txt_file_path = os.path.join(output_dir, txt_file_name)
-                with open(txt_file_path, 'w', encoding='utf-8') as f:
-                    f.write(text)
-                self.progress["value"] = i + 1  # Update progress bar
-                self.root.update_idletasks()  # Update the GUI
+        # 將所有文本合併到一個文件中，並使用來源檔案的名字
+        output_txt_filename = f"{filename}.txt"
+        output_txt_path = os.path.join(output_dir, output_txt_filename)
+        with open(output_txt_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(texts))
 
-        # 大語言模型翻譯
-        translated_texts = []
-        for i, text in enumerate(texts):
-            translated_text = self.translate(text)
-            translated_texts.append(translated_text)
-            self.progress["value"] = i + 1  # Update progress bar
-            self.root.update_idletasks()  # Update the GUI
-            time.sleep(1)
-
-        # 保存翻譯結果
-        with open(os.path.join(output_dir, 'translated.txt'), 'w', encoding='utf-8') as f:
-            for text in translated_texts:
-                f.write(text + '\n')
-
-    def update_progress(self, total_time):
-        # This method is no longer needed as we update the progress bar directly in process_pdf_file
-        pass
-
+        # 如果有進行翻譯，則將所有翻譯結果合併到一個文件中
+        if self.translate_var.get():
+            translated_txt_filename = f"{filename}_translated.txt"
+            translated_txt_path = os.path.join(output_dir, translated_txt_filename)
+            with open(translated_txt_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(translated_texts))
 
     def format_time(self, seconds):
         hours = int(seconds // 3600)
@@ -213,8 +198,6 @@ class FileProcessorApp:
         seconds = int(seconds % 60)
         milliseconds = int((seconds % 1) * 1000)
         return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
-
-
 
 if __name__ == '__main__':
     root = TkinterDnD.Tk()
